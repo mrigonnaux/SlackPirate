@@ -31,8 +31,13 @@ FILE_AWS_KEYS = "aws-keys.txt"
 FILE_PINNED_MESSAGES = "pinned-messages.txt"
 FILE_PRIVATE_KEYS = "private-keys.txt"
 FILE_LINKS = "URLs.txt"
+FILE_PAN = "pan.txt"
 
 # Query pieces
+
+# Enter your BIN here. All BIN available : https://www.freebinchecker.com/
+PAN_QUERIES = ["5542"]
+
 S3_QUERIES = ["s3.amazonaws.com", "s3://", "https://s3", "http://s3"]
 CREDENTIALS_QUERIES = ["password:", "password is", "pwd", "passwd"]
 AWS_KEYS_QUERIES = ["ASIA*", "AKIA*"]
@@ -95,6 +100,8 @@ CREDENTIALS_REGEX = r"(?i)(" \
                     r"|passwd\s*[`=:\"]+\s*[^\s]+)"
 # https://regex101.com/r/IEq5nU/4
 AWS_KEYS_REGEX = r"((?<![A-Za-z0-9/+])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])|(?<![A-Z0-9])[A-Z0-9]{20}(?![A-Z0-9]))"
+
+PAN = r"(?:[0-9]{4} ){3}[0-9]{4}|[0-9]{16}"     
 # https://regex101.com/r/SU43wh/1
 # Top-level domain capture group
 TLD_GROUP = r"(?:com|net|org|edu|gov|mil|aero|asia|biz|cat|coop|info|int" \
@@ -386,9 +393,54 @@ def find_credentials(token, scan_context: ScanningContext):
         "white", "on_green"))
     print(termcolor.colored("\n"))
 
+def find_PANs(token, scan_context: ScanningContext):
+    print(termcolor.colored("START: Attempting to find references to PAN", "white", "on_blue"))
+    pagination = {}
+
+    try:
+        r = None
+        for query in PAN_QUERIES:
+            while True:
+                params = dict(token=token, query=query, pretty=1, count=100)
+                r = requests.get("https://slack.com/api/search.messages",
+                             params=params,
+                             headers={'User-Agent': scan_context.user_agent}).json()
+                if not sleep_if_rate_limited(r):
+                    break
+            pagination[query] = (r['messages']['pagination']['page_count'])
+
+        for key, value in pagination.items():
+            page = 1
+            while page <= value:
+                sleep_if_rate_limited(r)
+                request_url = "https://slack.com/api/search.messages"
+                params = dict(token=token, query=key, pretty=1, count=100, page=str(page))
+                r = requests.get(request_url, params=params, headers={'User-Agent': scan_context.user_agent}).json()
+                # Replace Permalink false positive
+                for k in r["messages"]["matches"]:
+                    for k1 in k:
+                        if 'https://' in k[k1]:
+                            k[k1] = ""
+                        if isinstance(k[k1],dict):
+                            for i in k[k1]:
+                                if 'permalink' in i:
+                                    k[k1]["permalink"] = ""
+                regex_results = re.findall(PAN, str(r))
+                with open(scan_context.output_directory + '/' + FILE_PAN, 'a', encoding="utf-8") as log_output:
+                    for item in set(regex_results):
+                        log_output.write(item + "\n")
+                page += 1
+    except requests.exceptions.RequestException as exception:
+        print(termcolor.colored(exception, "white", "on_red"))
+    file_cleanup(input_file=FILE_PAN, scan_context=scan_context)
+    print(termcolor.colored(
+        "END: If any PAN were found, they will be here: ./" + scan_context.output_directory +
+        "/" + FILE_PAN, "white", "on_green"))
+    print(termcolor.colored("\n"))
+
 
 def find_aws_keys(token, scan_context: ScanningContext):
-    print(termcolor.colored("START: Attempting to find references to AWS keys", "white", "on_blue"))
+    print(termcolor.colored("START: Attempting to find references to AWS KEYS", "white", "on_blue"))
     pagination = {}
 
     try:
@@ -744,6 +796,10 @@ if __name__ == '__main__':
                         help='enable searching for messages referencing credentials')
     parser.add_argument('--no-credential-scan', dest='credential_scan', action='store_false',
                         help='disable searching for messages referencing credentials')
+    parser.add_argument('--pan-scan', dest='pan_scan', action='store_true',
+                        help='enable searching for messages referencing PAN')
+    parser.add_argument('--no-pan-scan', dest='pan_scan', action='store_false',
+                        help='disable searching for messages referencing PAN')
     parser.add_argument('--aws-key-scan', dest='aws_key_scan', action='store_true',
                         help='enable searching for AWS keys in messages')
     parser.add_argument('--no-aws-key-scan', dest='aws_key_scan', action='store_false',
@@ -799,6 +855,7 @@ if __name__ == '__main__':
         ('team_access_logs', dump_team_access_logs),
         ('user_list', dump_user_list),
         ('s3_scan', find_s3),
+        ('PANs', find_PANs),
         ('credential_scan', find_credentials),
         ('aws_key_scan', find_aws_keys),
         ('private_key_scan', find_private_keys),

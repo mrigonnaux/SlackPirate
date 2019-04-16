@@ -24,6 +24,7 @@ The tool uses the native Slack APIs to extract 'interesting' information and loo
   * Print to standard output the domains (if any) that are allowed to register for the Workspace - I've seen stale, old and forgotten domains here that can be purchased and used to register for the Workspace
   * Links to S3 buckets
   * Passwords
+  * PAN Numbers
   * AWS Access/Secret keys
   * Private Keys
   * Pinned messages across all Channels
